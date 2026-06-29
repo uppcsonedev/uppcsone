@@ -139,6 +139,7 @@ export default function Storefront({ purchasedBooks, setPurchasedBooks }) {
         <div>
           <h2 className="book-title" style={{ margin: 0, fontSize: '28px' }}>Handout Storefront</h2>
           <p className="book-description" style={{ margin: 0, marginTop: '4px' }}>Online access to exam handouts immediately after purchase.</p>
+          <p className="book-description" style={{ margin: 0, marginTop: '4px' }}> यह सभी नोट्स आप यहाँ से डाउनलोड करके PDF प्राप्त कर सकते हैं, PDF आप अपने पास सेव भी कर सकते हैं एवं उसका प्रिंट भी करवा सकते हैं।</p>
         </div>
         
         <DarkModeToggle />
