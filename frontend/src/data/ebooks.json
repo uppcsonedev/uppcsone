@@ -1,0 +1,27 @@
+[
+  {
+    "id": "eb-001",
+    "title": "Sam-Samyik Ghatnasar 2026 (Annual E-Edition)",
+    "category": "Current Affairs",
+    "price": 90,
+    "format": "PDF",
+    "fileSize": "14 MB",
+    "pages": 128,
+    "coverImage": "/ghatnasaar2024.jpg",
+    "description": "Comprehensive current affairs compilation optimized for mobile reading and rapid revision.",
+    "sampleUrl": "#",
+    "fileUrl": "/sample.pdf"
+  },
+  {
+    "id": "eb-002",
+    "title": "UPPCS Prelims 10-Year Practice Set",
+    "category": "Practice Papers",
+    "price": 50,
+    "format": "PDF",
+    "fileSize": "8 MB",
+    "pages": 240,
+    "coverImage": "/book3.jpg",
+    "description": "Topic-wise previous year questions with detailed explanations and error-free answer keys.",
+    "sampleUrl": "#"
+  }
+]

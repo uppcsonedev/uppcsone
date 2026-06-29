@@ -1,0 +1,375 @@
+@import url('https://fonts.googleapis.com/css2?family=Mukta:wght@400;500;600;700&display=swap');
+
+/* ==========================================
+   Theme Variables (Light & Dark)
+========================================== */
+:root {
+  --bg-primary: #f8fafc;
+  --bg-surface: #ffffff;
+  --text-main: #0f172a;
+  --text-muted: #64748b;
+  --border-color: #e2e8f0;
+  --border-focus: #cbd5e1;
+  --primary: #1e3a8a;
+  --primary-hover: #1e40af;
+  --teal-accent: #0f766e;
+  --success-bg: #10b981;
+  --success-hover: #059669;
+  --success-text: #16a34a;
+  --shadow-color: rgba(0, 0, 0, 0.1);
+  --overlay-bg: rgba(15, 23, 42, 0.7);
+  --glass-bg: rgba(248, 250, 252, 0.85); /* Light glass */
+}
+
+[data-theme='dark'] {
+  --bg-primary: #0f172a;
+  --bg-surface: #1e293b;
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --border-color: #334155;
+  --border-focus: #475569;
+  --primary: #2dd4bf;
+  --primary-hover: #22a191;
+  --teal-accent: #2dd4bf;
+  --success-bg: #059669;
+  --success-hover: #10b981;
+  --success-text: #4ade80;
+  --shadow-color: rgba(0, 0, 0, 0.3);
+  --overlay-bg: rgba(2, 6, 23, 0.85);
+  --glass-bg: rgba(15, 23, 42, 0.85); /* Dark glass */
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+body {
+  font-family: 'Mukta', sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-main);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+/* ==========================================
+   GLASSMORPHISM NAVBAR
+========================================== */
+.navbar-glass {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background-color: var(--glass-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-color);
+  transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+/* ==========================================
+   2-COLUMN MOBILE GRID
+========================================== */
+.ebooks-grid {
+  display: grid;
+  /* Automatically squeezes 2 columns on mobile, expands on desktop */
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 16px; 
+  padding: 10px 0 30px 0;
+}
+
+/* ==========================================
+   NATIVE-APP EDGE-TO-EDGE CARDS
+========================================== */
+.premium-card {
+  background: var(--bg-surface);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px var(--shadow-color);
+  border: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.3s ease;
+}
+
+.premium-card:active {
+  transform: scale(0.98);
+}
+
+.card-image-container {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3/4; /* Perfect vertical book ratio */
+  background-color: var(--bg-primary);
+  border-bottom: 1px solid var(--border-color);
+  overflow: hidden;
+}
+
+.card-cover {
+  width: 100%;
+  height: 100%;
+  object-fit: fill; /* Bleeds to the edges */
+  transition: transform 0.3s ease;
+}
+
+.trust-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: var(--bg-surface);
+  color: var(--success-text);
+  padding: 4px 8px;
+  border-radius: 20px;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  box-shadow: 0 2px 4px var(--shadow-color);
+  backdrop-filter: blur(4px);
+}
+
+.card-content {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+}
+
+.category-tag {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--teal-accent);
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.book-title {
+  margin: 0 0 4px 0;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--text-main);
+  /* Truncates long titles on mobile */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.meta-item {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.book-price {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--teal-accent);
+  margin-bottom: 12px;
+  margin-top: auto; 
+}
+
+/* ==========================================
+   Buttons
+========================================== */
+.btn {
+  padding: 10px 14px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+
+.btn-primary { 
+  background: var(--primary); 
+  color: #ffffff;
+}
+.btn-primary:hover {
+  background: var(--primary-hover);
+}
+
+.card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card-actions .btn {
+  width: 100%;
+  height: 38px; 
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 14px;
+  border-radius: 8px;
+}
+
+.btn-success {
+  background-color: var(--success-bg);
+  color: #ffffff;
+}
+
+.btn-success:hover {
+  background-color: var(--success-hover);
+}
+
+.shadow-btn {
+  box-shadow: 0 4px 14px 0 rgba(15, 118, 110, 0.39);
+}
+
+/* ==========================================
+   Modals & Overlays
+========================================== */
+.modal-overlay, .gateway-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--overlay-bg);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.modal-content {
+  background: var(--bg-surface);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 450px;
+  overflow: hidden;
+  box-shadow: 0 20px 25px -5px var(--shadow-color);
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.modal-header {
+  padding: 20px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-body {
+  padding: 20px;
+}
+
+.order-summary {
+  display: flex;
+  gap: 15px;
+  background: var(--bg-primary);
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  border: 1px solid var(--border-color);
+}
+
+.summary-img {
+  width: 60px;
+  height: 85px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+/* ==========================================
+   Forms & Inputs
+========================================== */
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--text-main);
+}
+
+.input-field {
+  width: 100%;
+  padding: 10px 12px;
+  background-color: var(--bg-surface);
+  color: var(--text-main);
+  border: 1px solid var(--border-focus);
+  border-radius: 6px;
+  font-size: 16px; 
+}
+
+.input-field:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+/* ==========================================
+   Horizontal Category Filter Bar
+========================================== */
+.category-filter-container {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 10px 4px 20px 4px;
+  margin-bottom: 10px;
+  -webkit-overflow-scrolling: touch; 
+}
+
+.category-filter-container::-webkit-scrollbar {
+  display: none;
+}
+
+.category-filter-container {
+  -ms-overflow-style: none; 
+  scrollbar-width: none;  
+}
+
+.chip {
+  padding: 8px 16px;
+  background-color: var(--bg-surface);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.chip:hover {
+  border-color: var(--border-focus);
+  color: var(--text-main);
+}
+
+.chip.active {
+  background-color: var(--teal-accent);
+  color: #ffffff;
+  border-color: var(--teal-accent);
+  box-shadow: 0 4px 12px rgba(15, 118, 110, 0.25);
+}
