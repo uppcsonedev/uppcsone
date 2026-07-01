@@ -172,20 +172,18 @@ app.get('/api/download/:orderId', (req, res) => {
 
     const fileUrl = results[0].file_url;
 
-    if (!fileUrl || !fileUrl.startsWith('http')) {
-      return res.status(404).send('<h1>File Error</h1><p>Invalid file link in database.</p>');
-    }
-
-    // Quietly fetch from Cloudinary and force a download
+    if (fileUrl.startsWith('http')) {
+    // IT'S A NEW BOOK: Stream from Cloudinary
     https.get(fileUrl, (cloudinaryRes) => {
-      res.setHeader('Content-Type', 'application/pdf');
-      // 'attachment' forces the browser to download the file
-      res.setHeader('Content-Disposition', `attachment; filename="Ebook_${orderId}.pdf"`);
-      cloudinaryRes.pipe(res);
-    }).on('error', (e) => {
-      console.error("Cloudinary Fetch Error:", e);
-      res.status(500).send('Error loading the PDF.');
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="Ebook_${orderId}.pdf"`);
+        cloudinaryRes.pipe(res);
     });
+} else {
+    // IT'S AN OLD BOOK: Serve from local folder
+    const filePath = path.join(__dirname, 'protected_files', fileUrl);
+    res.sendFile(filePath);
+}
   });
 });
 
@@ -210,22 +208,18 @@ app.get('/api/stream/:orderId', (req, res) => {
       return res.status(403).send('<h1>Access Denied</h1><p>Payment verification pending.</p>');
     }
 
-    const fileUrl = results[0].file_url;
-
-    if (!fileUrl || !fileUrl.startsWith('http')) {
-      return res.status(404).send('<h1>Book Not Uploaded</h1><p>The PDF for this book has not been attached to the database yet.</p>');
-    }
-
-    // Quietly fetch from Cloudinary and stream to the browser viewer
+    if (fileUrl.startsWith('http')) {
+    // IT'S A NEW BOOK: Stream from Cloudinary
     https.get(fileUrl, (cloudinaryRes) => {
-      res.setHeader('Content-Type', 'application/pdf');
-      // 'inline' tells the browser to open it in a reading tab
-      res.setHeader('Content-Disposition', `inline; filename="Ebook_${orderId}.pdf"`);
-      cloudinaryRes.pipe(res);
-    }).on('error', (e) => {
-      console.error("Cloudinary Fetch Error:", e);
-      res.status(500).send('Error loading the PDF.');
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="Ebook_${orderId}.pdf"`);
+        cloudinaryRes.pipe(res);
     });
+} else {
+    // IT'S AN OLD BOOK: Serve from local folder
+    const filePath = path.join(__dirname, 'protected_files', fileUrl);
+    res.sendFile(filePath);
+}
   });
 });
 
