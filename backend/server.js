@@ -258,19 +258,30 @@ app.post('/api/admin/upload', cpUpload, (req, res) => {
 
   const { title, category, pages, fileSize, price, physicalPrice } = req.body;
   
-  // 👇 Cloudinary returns the full, secure web URL in the 'path' variable
   const pdfUrl = req.files['pdf'][0].path; 
   const coverUrl = req.files['coverImage'][0].path; 
 
+  // 👇 NEW: Automatically generate a unique text ID for your database format
+  const newBookId = 'book_' + Date.now(); 
+
+  // 👇 NEW: Added 'id' and 'description' to perfectly match your table structure
   const sql = `
     INSERT INTO books 
-    (title, category, pages, file_size_mb, price, physical_price, cover_image, file_url) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    (id, title, description, category, pages, file_size_mb, price, physical_price, cover_image, file_url) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
   
   const values = [
-    title, category || null, pages || null, fileSize || null, 
-    price, physicalPrice || null, coverUrl, pdfUrl
+    newBookId,
+    title, 
+    "No description provided.", // Fallback text so the database doesn't crash
+    category || null, 
+    pages || null, 
+    fileSize || null, 
+    price, 
+    physicalPrice || null, 
+    coverUrl, 
+    pdfUrl
   ];
 
   db.query(sql, values, (err, result) => {
