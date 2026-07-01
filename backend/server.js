@@ -6,11 +6,25 @@ const path = require('path');
 const crypto = require('crypto');
 const Razorpay = require('razorpay');
 const fs = require('fs'); 
+const multer = require('multer'); // 👈 NEW: Imported Multer
+
+// 👇 NEW: Cloudinary Imports
+const { v2: cloudinary } = require('cloudinary');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const https = require('https'); 
+
+// 👇 NEW: Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+
 
 app.get('/ping', (req, res) => {
   res.status(200).send('Server is awake');
@@ -34,7 +48,6 @@ const dbConfig = process.env.DB_HOST ? {
   port: process.env.DB_PORT,
   database: 'defaultdb',
   ssl: { rejectUnauthorized: false },
-  // Pool-specific settings:
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0
@@ -49,17 +62,15 @@ const dbConfig = process.env.DB_HOST ? {
   queueLimit: 0
 };
 
-// Create the pool instead of a single connection
 const db = mysql.createPool(dbConfig);
 
-// Test the pool on startup
 db.getConnection((err, connection) => {
   if (err) {
     console.error('Database connection failed:', err.stack);
     return;
   }
   console.log('Connected to the database successfully using a Connection Pool!');
-  connection.release(); // Hand the connection back to the pool so it can be used by the routes
+  connection.release(); 
 });
 
 // ==========================================
@@ -70,14 +81,12 @@ db.getConnection((err, connection) => {
 app.post('/api/orders', (req, res) => {
   const { name, whatsapp, email, bookId } = req.body;
   
-  // Securely fetch the actual price from the database first
   db.query('SELECT price FROM books WHERE id = ?', [bookId], (err, bookResults) => {
     if (err || bookResults.length === 0) {
       return res.status(404).json({ error: 'Book not found or database error' });
     }
 
     const actualPrice = bookResults[0].price;
-
     const sql = `INSERT INTO orders (customer_name, whatsapp_number, email, book_id, payment_status) VALUES (?, ?, ?, ?, 'Pending')`;
     
     db.query(sql, [name, whatsapp, email, bookId], async (err, result) => {
@@ -90,7 +99,7 @@ app.post('/api/orders', (req, res) => {
 
       try {
         const options = {
-          amount: actualPrice * 100, // Dynamically converts DB price to paise
+          amount: actualPrice * 100, 
           currency: "INR",
           receipt: `receipt_${internalOrderId}`
         };
@@ -140,7 +149,9 @@ app.post('/api/payment/verify', (req, res) => {
   });
 });
 
+// ==========================================
 // Route C: Secure Digital Delivery (Download)
+// ==========================================
 app.get('/api/download/:orderId', (req, res) => {
   const orderId = req.params.orderId;
   
@@ -159,12 +170,28 @@ app.get('/api/download/:orderId', (req, res) => {
       return res.status(403).send('<h1>Access Denied</h1><p>Payment verification pending.</p>');
     }
 
-    const filePath = path.join(__dirname, 'protected_files', results[0].file_url);
-    res.download(filePath); 
+    const fileUrl = results[0].file_url;
+
+    if (!fileUrl || !fileUrl.startsWith('http')) {
+      return res.status(404).send('<h1>File Error</h1><p>Invalid file link in database.</p>');
+    }
+
+    // Quietly fetch from Cloudinary and force a download
+    https.get(fileUrl, (cloudinaryRes) => {
+      res.setHeader('Content-Type', 'application/pdf');
+      // 'attachment' forces the browser to download the file
+      res.setHeader('Content-Disposition', `attachment; filename="Ebook_${orderId}.pdf"`);
+      cloudinaryRes.pipe(res);
+    }).on('error', (e) => {
+      console.error("Cloudinary Fetch Error:", e);
+      res.status(500).send('Error loading the PDF.');
+    });
   });
 });
 
+// ==========================================
 // Route C.2: Secure Digital Stream (Read in Browser)
+// ==========================================
 app.get('/api/stream/:orderId', (req, res) => {
   const orderId = req.params.orderId;
   
@@ -185,21 +212,74 @@ app.get('/api/stream/:orderId', (req, res) => {
 
     const fileUrl = results[0].file_url;
 
-    if (!fileUrl || fileUrl.trim() === '') {
+    if (!fileUrl || !fileUrl.startsWith('http')) {
       return res.status(404).send('<h1>Book Not Uploaded</h1><p>The PDF for this book has not been attached to the database yet.</p>');
     }
 
-    const filePath = path.join(__dirname, 'protected_files', fileUrl);
+    // Quietly fetch from Cloudinary and stream to the browser viewer
+    https.get(fileUrl, (cloudinaryRes) => {
+      res.setHeader('Content-Type', 'application/pdf');
+      // 'inline' tells the browser to open it in a reading tab
+      res.setHeader('Content-Disposition', `inline; filename="Ebook_${orderId}.pdf"`);
+      cloudinaryRes.pipe(res);
+    }).on('error', (e) => {
+      console.error("Cloudinary Fetch Error:", e);
+      res.status(500).send('Error loading the PDF.');
+    });
+  });
+});
 
-    if (!fs.existsSync(filePath)) {
-      console.error(`🚨 Missing File: ${filePath}`);
-      return res.status(404).send('<h1>File Missing</h1><p>The PDF file cannot be found on the server. Please contact support.</p>');
+// ==========================================
+// Route F: Secure Admin Multi-File Upload (CLOUDINARY)
+// ==========================================
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'uppcs_store_files', // Creates a clean folder in your Cloudinary account
+    resource_type: 'auto',       // CRITICAL: Allows both PDFs and Images
+    public_id: (req, file) => {
+      const cleanName = file.originalname.replace(/\s+/g, '_').split('.')[0];
+      return Date.now() + '_' + cleanName;
     }
+  }
+});
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="Ebook_${orderId}.pdf"`);
+const upload = multer({ storage: storage });
 
-    res.sendFile(filePath); 
+const cpUpload = upload.fields([
+  { name: 'pdf', maxCount: 1 }, 
+  { name: 'coverImage', maxCount: 1 }
+]);
+
+app.post('/api/admin/upload', cpUpload, (req, res) => {
+  if (!req.files || !req.files['pdf'] || !req.files['coverImage']) {
+    return res.status(400).json({ error: 'Both PDF and Cover Image are required.' });
+  }
+
+  const { title, category, pages, fileSize, price, physicalPrice } = req.body;
+  
+  // 👇 Cloudinary returns the full, secure web URL in the 'path' variable
+  const pdfUrl = req.files['pdf'][0].path; 
+  const coverUrl = req.files['coverImage'][0].path; 
+
+  const sql = `
+    INSERT INTO books 
+    (title, category, pages, file_size_mb, price, physical_price, cover_image, file_url) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `;
+  
+  const values = [
+    title, category || null, pages || null, fileSize || null, 
+    price, physicalPrice || null, coverUrl, pdfUrl
+  ];
+
+  db.query(sql, values, (err, result) => {
+    if (err) {
+      console.error('🚨 Admin Upload DB Error:', err);
+      return res.status(500).json({ error: 'Failed to save to database.' });
+    }
+    console.log(`✅ Uploaded to Cloudinary & DB: ${title}`);
+    res.status(200).json({ success: true, message: 'Upload successful!' });
   });
 });
 
@@ -234,7 +314,7 @@ app.get('/api/books', (req, res) => {
       description: book.description,
       category: book.category,
       pages: book.pages,
-      fileSize: `${book.file_size_mb} MB (PDF)`,
+      fileSize: book.file_size_mb ? `${book.file_size_mb} MB (PDF)` : 'Unknown Size',
       price: book.price,
       coverImage: book.cover_image,
       fileUrl: book.file_url,
