@@ -28,7 +28,6 @@ export default function Footer() {
           <h4 style={{ fontSize: '16px', marginBottom: '16px', color: '#ffffff', textTransform: 'uppercase', letterSpacing: '1px' }}>Contact Us</h4>
           <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '8px' }}><strong>Email:</strong> uppcs1.0@gmail.com</p>
           <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '8px' }}><strong>Phone(Whatsapp only):</strong> +91 9415950206</p>
-          <p style={{ fontSize: '14px', color: '#94a3b8', marginBottom: '8px' }}><strong>Tech Support(Whatsapp only):</strong> +91 8707641625</p>
     
         </div>
 
