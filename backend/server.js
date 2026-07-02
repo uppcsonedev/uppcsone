@@ -6,14 +6,13 @@ const path = require('path');
 const crypto = require('crypto');
 const Razorpay = require('razorpay');
 const fs = require('fs'); 
-const multer = require('multer'); // 👈 NEW: Imported Multer
+const multer = require('multer');
 
-// 👇 NEW: Cloudinary Imports
+// Cloudinary Imports
 const { v2: cloudinary } = require('cloudinary');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const https = require('https'); 
 
-// 👇 NEW: Configure Cloudinary
+// Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -21,10 +20,8 @@ cloudinary.config({
 });
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
-
 
 app.get('/ping', (req, res) => {
   res.status(200).send('Server is awake');
@@ -39,7 +36,7 @@ const razorpay = new Razorpay({
 });
 
 // ==========================================
-// 🚀 THE FIX: BULLETPROOF CONNECTION POOL
+// BULLETPROOF CONNECTION POOL
 // ==========================================
 const dbConfig = process.env.DB_HOST ? {
   host: process.env.DB_HOST,
@@ -74,6 +71,35 @@ db.getConnection((err, connection) => {
 });
 
 // ==========================================
+// Helper Function: Secure Cloudinary Fetcher
+// ==========================================
+const streamFromCloudinary = (url, res, orderId, isDownload) => {
+  const secureUrl = url.replace('http://', 'https://');
+  const https = require('https');
+
+  https.get(secureUrl, (cloudRes) => {
+      // 1. Follow Cloudinary Redirects
+      if (cloudRes.statusCode >= 300 && cloudRes.statusCode < 400 && cloudRes.headers.location) {
+          return streamFromCloudinary(cloudRes.headers.location, res, orderId, isDownload);
+      }
+
+      // 2. Gatekeeper
+      if (cloudRes.statusCode !== 200) {
+          console.error(`Cloudinary Error! Status: ${cloudRes.statusCode}`);
+          return res.status(500).send(`Error fetching file. Cloudinary Status: ${cloudRes.statusCode}`);
+      }
+
+      // 3. Pipe to Browser
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `${isDownload ? 'attachment' : 'inline'}; filename="Ebook_${orderId}.pdf"`);
+      cloudRes.pipe(res);
+  }).on('error', (e) => {
+      console.error("Cloud Fetch Error:", e);
+      res.status(500).send('Network error while loading PDF.');
+  });
+};
+
+// ==========================================
 // API ROUTES
 // ==========================================
 
@@ -82,18 +108,13 @@ app.post('/api/orders', (req, res) => {
   const { name, whatsapp, email, bookId } = req.body;
   
   db.query('SELECT price FROM books WHERE id = ?', [bookId], (err, bookResults) => {
-    if (err || bookResults.length === 0) {
-      return res.status(404).json({ error: 'Book not found or database error' });
-    }
+    if (err || bookResults.length === 0) return res.status(404).json({ error: 'Book not found' });
 
     const actualPrice = bookResults[0].price;
     const sql = `INSERT INTO orders (customer_name, whatsapp_number, email, book_id, payment_status) VALUES (?, ?, ?, ?, 'Pending')`;
     
     db.query(sql, [name, whatsapp, email, bookId], async (err, result) => {
-      if (err) {
-        console.error('🚨 CRITICAL DATABASE ERROR 🚨:', err);
-        return res.status(500).json({ error: 'Failed to create order', sqlMessage: err.message });
-      }
+      if (err) return res.status(500).json({ error: 'Failed to create order' });
       
       const internalOrderId = result.insertId;
 
@@ -101,7 +122,8 @@ app.post('/api/orders', (req, res) => {
         const options = {
           amount: actualPrice * 100, 
           currency: "INR",
-          receipt: `receipt_${internalOrderId}`
+          receipt: `receipt_${internalOrderId}`,
+          notes: { internal_order_id: internalOrderId } // 👈 REQUIRED FOR WEBHOOK
         };
 
         const razorpayOrder = await razorpay.orders.create(options);
@@ -114,19 +136,18 @@ app.post('/api/orders', (req, res) => {
           currency: razorpayOrder.currency
         });
       } catch (rzpErr) {
-        console.error("Razorpay API Error:", rzpErr);
         res.status(500).json({ error: "Failed to connect to payment gateway." });
       }
     });
   });
 });
 
-// Route B: Cryptographic Signature Verification (Gateway Webhook)
+// Route B: Cryptographic Signature Verification (Gateway Webhook - Frontend)
 app.post('/api/payment/verify', (req, res) => {
   const { internalOrderId, gatewayOrderId, gatewayPaymentId, gatewaySignature } = req.body;
 
   if (!gatewayOrderId || !gatewayPaymentId || !gatewaySignature) {
-    return res.status(400).json({ success: false, message: 'Invalid payment signature payload.' });
+    return res.status(400).json({ success: false, message: 'Invalid payload.' });
   }
 
   const generatedSignature = crypto
@@ -135,18 +156,47 @@ app.post('/api/payment/verify', (req, res) => {
     .digest('hex');
 
   if (generatedSignature !== gatewaySignature) {
-    console.error("🚨 FRAUD ATTEMPT: Signatures do not match!");
-    return res.status(400).json({ success: false, message: 'Cryptographic verification failed.' });
+    return res.status(400).json({ success: false, message: 'Verification failed.' });
   }
 
   const sql = `UPDATE orders SET payment_status = 'Paid' WHERE id = ?`;
-  
-  db.query(sql, [internalOrderId], (err, result) => {
+  db.query(sql, [internalOrderId], (err) => {
     if (err) return res.status(500).json({ error: 'Database update failed' });
-    
-    console.log(`Verified Transaction: Order #${internalOrderId} successfully upgraded to PAID status.`);
-    res.json({ success: true, message: 'Payment verified and captured successfully.' });
+    res.json({ success: true, message: 'Payment verified.' });
   });
+});
+
+// ==========================================
+// Route B.2: TRUE SERVER-TO-SERVER WEBHOOK
+// ==========================================
+app.post('/api/webhook/razorpay', (req, res) => {
+  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET; 
+  const signature = req.headers['x-razorpay-signature'];
+
+  if (!signature || !webhookSecret) return res.status(400).send('Missing config');
+
+  try {
+    const expectedSignature = crypto
+      .createHmac('sha256', webhookSecret)
+      .update(JSON.stringify(req.body))
+      .digest('hex');
+
+    if (expectedSignature === signature) {
+      if (req.body.event === 'payment.captured') {
+        const internalOrderId = req.body.payload.payment.entity.notes?.internal_order_id;
+        if (internalOrderId) {
+          db.query(`UPDATE orders SET payment_status = 'Paid' WHERE id = ?`, [internalOrderId], (err) => {
+            if (!err) console.log(`✅ Webhook Success: Order #${internalOrderId} marked Paid!`);
+          });
+        }
+      }
+      res.status(200).send('Webhook verified');
+    } else {
+      res.status(400).send('Invalid signature');
+    }
+  } catch (error) {
+    res.status(500).send('Server Error');
+  }
 });
 
 // ==========================================
@@ -154,44 +204,19 @@ app.post('/api/payment/verify', (req, res) => {
 // ==========================================
 app.get('/api/download/:orderId', (req, res) => {
   const orderId = req.params.orderId;
-  
-  const sql = `
-    SELECT o.payment_status, b.file_url 
-    FROM orders o 
-    JOIN books b ON o.book_id = b.id 
-    WHERE o.id = ?
-  `;
+  const sql = `SELECT o.payment_status, b.file_url FROM orders o JOIN books b ON o.book_id = b.id WHERE o.id = ?`;
   
   db.query(sql, [orderId], (err, results) => {
     if (err) return res.status(500).json({ error: 'Database error' });
     if (results.length === 0) return res.status(404).json({ error: 'Order not found' });
-
-    if (results[0].payment_status !== 'Paid') {
-      return res.status(403).send('<h1>Access Denied</h1><p>Payment verification pending.</p>');
-    }
+    if (results[0].payment_status !== 'Paid') return res.status(403).send('Access Denied');
 
     const fileUrl = results[0].file_url;
 
     if (fileUrl.startsWith('http')) {
-        // IT'S A NEW BOOK: Force Download from Cloudinary
-        const reqLib = fileUrl.startsWith('https') ? require('https') : require('http');
-        reqLib.get(fileUrl, (cloudinaryRes) => {
-            // 🚨 Gatekeeper: Only pipe if Cloudinary actually sends the file
-            if (cloudinaryRes.statusCode !== 200) {
-                return res.status(500).send('Error fetching file from cloud storage.');
-            }
-            res.setHeader('Content-Type', 'application/pdf');
-            // 👉 Changed to 'attachment' to force the browser to download
-            res.setHeader('Content-Disposition', `attachment; filename="Ebook_${orderId}.pdf"`);
-            cloudinaryRes.pipe(res);
-        }).on('error', (e) => {
-            console.error("Cloudinary Fetch Error:", e);
-            res.status(500).send('Error loading the PDF.');
-        });
+        streamFromCloudinary(fileUrl, res, orderId, true); // true = force download
     } else {
-        // IT'S AN OLD BOOK: Force Download from local folder
         const filePath = path.join(__dirname, 'protected_files', fileUrl);
-        // 👉 Changed to res.download() to trigger a forced file save
         res.download(filePath, `Ebook_${orderId}.pdf`);
     }
   });
@@ -202,45 +227,19 @@ app.get('/api/download/:orderId', (req, res) => {
 // ==========================================
 app.get('/api/stream/:orderId', (req, res) => {
   const orderId = req.params.orderId;
-  
-  const sql = `
-    SELECT o.payment_status, b.file_url 
-    FROM orders o 
-    JOIN books b ON o.book_id = b.id 
-    WHERE o.id = ?
-  `;
+  const sql = `SELECT o.payment_status, b.file_url FROM orders o JOIN books b ON o.book_id = b.id WHERE o.id = ?`;
   
   db.query(sql, [orderId], (err, results) => {
     if (err) return res.status(500).json({ error: 'Database error' });
     if (results.length === 0) return res.status(404).json({ error: 'Order not found' });
+    if (results[0].payment_status !== 'Paid') return res.status(403).send('Access Denied');
 
-    if (results[0].payment_status !== 'Paid') {
-      return res.status(403).send('<h1>Access Denied</h1><p>Payment verification pending.</p>');
-    }
-
-    // 👉 BUG FIX: Restored this missing variable
     const fileUrl = results[0].file_url;
 
     if (fileUrl.startsWith('http')) {
-        // IT'S A NEW BOOK: Stream from Cloudinary
-        const reqLib = fileUrl.startsWith('https') ? require('https') : require('http');
-        reqLib.get(fileUrl, (cloudinaryRes) => {
-            // 🚨 Gatekeeper check
-            if (cloudinaryRes.statusCode !== 200) {
-                return res.status(500).send('Error fetching file from cloud storage.');
-            }
-            res.setHeader('Content-Type', 'application/pdf');
-            // 👉 'inline' tells the browser to open it in a reading tab
-            res.setHeader('Content-Disposition', `inline; filename="Ebook_${orderId}.pdf"`);
-            cloudinaryRes.pipe(res);
-        }).on('error', (e) => {
-            console.error("Cloudinary Fetch Error:", e);
-            res.status(500).send('Error loading the PDF.');
-        });
+        streamFromCloudinary(fileUrl, res, orderId, false); // false = inline stream
     } else {
-        // IT'S AN OLD BOOK: Serve from local folder
         const filePath = path.join(__dirname, 'protected_files', fileUrl);
-        // 👉 res.sendFile() opens it in the browser viewer
         res.sendFile(filePath);
     }
   });
@@ -252,8 +251,8 @@ app.get('/api/stream/:orderId', (req, res) => {
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'uppcs_store_files', // Creates a clean folder in your Cloudinary account
-    resource_type: 'auto',       // CRITICAL: Allows both PDFs and Images
+    folder: 'uppcs_store_files', 
+    resource_type: 'auto',       
     public_id: (req, file) => {
       const cleanName = file.originalname.replace(/\s+/g, '_').split('.')[0];
       return Date.now() + '_' + cleanName;
@@ -262,11 +261,7 @@ const storage = new CloudinaryStorage({
 });
 
 const upload = multer({ storage: storage });
-
-const cpUpload = upload.fields([
-  { name: 'pdf', maxCount: 1 }, 
-  { name: 'coverImage', maxCount: 1 }
-]);
+const cpUpload = upload.fields([{ name: 'pdf', maxCount: 1 }, { name: 'coverImage', maxCount: 1 }]);
 
 app.post('/api/admin/upload', cpUpload, (req, res) => {
   if (!req.files || !req.files['pdf'] || !req.files['coverImage']) {
@@ -274,56 +269,23 @@ app.post('/api/admin/upload', cpUpload, (req, res) => {
   }
 
   const { title, category, pages, fileSize, price, physicalPrice } = req.body;
-  
   const pdfUrl = req.files['pdf'][0].path; 
   const coverUrl = req.files['coverImage'][0].path; 
-
-  // 👇 NEW: Automatically generate a unique text ID for your database format
   const newBookId = 'book_' + Date.now(); 
 
-  // 👇 NEW: Added 'id' and 'description' to perfectly match your table structure
-  const sql = `
-    INSERT INTO books 
-    (id, title, description, category, pages, file_size_mb, price, physical_price, cover_image, file_url) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `;
-  
-  const values = [
-    newBookId,
-    title, 
-    "No description provided.", // Fallback text so the database doesn't crash
-    category || null, 
-    pages || null, 
-    fileSize || null, 
-    price, 
-    physicalPrice || null, 
-    coverUrl, 
-    pdfUrl
-  ];
+  const sql = `INSERT INTO books (id, title, description, category, pages, file_size_mb, price, physical_price, cover_image, file_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  const values = [newBookId, title, "No description provided.", category || null, pages || null, fileSize || null, price, physicalPrice || null, coverUrl, pdfUrl];
 
-  db.query(sql, values, (err, result) => {
-    if (err) {
-      console.error('🚨 Admin Upload DB Error:', err);
-      return res.status(500).json({ error: 'Failed to save to database.' });
-    }
-    console.log(`✅ Uploaded to Cloudinary & DB: ${title}`);
+  db.query(sql, values, (err) => {
+    if (err) return res.status(500).json({ error: 'Failed to save to database.' });
     res.status(200).json({ success: true, message: 'Upload successful!' });
   });
 });
 
 // Route D: Fetch User Library
 app.get('/api/library/:contact', (req, res) => {
-  const contact = req.params.contact;
-  
-  const sql = `
-    SELECT id AS orderId, book_id AS bookId, created_at 
-    FROM orders 
-    WHERE (email = ? OR whatsapp_number = ?) 
-    AND payment_status = 'Paid'
-    ORDER BY created_at DESC
-  `;
-  
-  db.query(sql, [contact, contact], (err, results) => {
+  const sql = `SELECT id AS orderId, book_id AS bookId, created_at FROM orders WHERE (email = ? OR whatsapp_number = ?) AND payment_status = 'Paid' ORDER BY created_at DESC`;
+  db.query(sql, [req.params.contact, req.params.contact], (err, results) => {
     if (err) return res.status(500).json({ error: 'Failed to fetch library' });
     res.json({ success: true, library: results });
   });
@@ -331,24 +293,13 @@ app.get('/api/library/:contact', (req, res) => {
 
 // Route E: Fetch Store Catalog
 app.get('/api/books', (req, res) => {
-  const sql = `SELECT * FROM books ORDER BY created_at DESC`;
-  
-  db.query(sql, (err, results) => {
+  db.query(`SELECT * FROM books ORDER BY created_at DESC`, (err, results) => {
     if (err) return res.status(500).json({ error: 'Failed to fetch catalog' });
-    
     const formattedBooks = results.map(book => ({
-      id: book.id,
-      title: book.title,
-      description: book.description,
-      category: book.category,
-      pages: book.pages,
+      id: book.id, title: book.title, description: book.description, category: book.category, pages: book.pages,
       fileSize: book.file_size_mb ? `${book.file_size_mb} MB (PDF)` : 'Unknown Size',
-      price: book.price,
-      coverImage: book.cover_image,
-      fileUrl: book.file_url,
-      physical_price: book.physical_price 
+      price: book.price, coverImage: book.cover_image, fileUrl: book.file_url, physical_price: book.physical_price 
     }));
-
     res.json({ success: true, books: formattedBooks });
   });
 });
