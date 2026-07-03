@@ -273,27 +273,36 @@ app.post('/api/admin/upload', cpUpload, async (req, res) => {
   const newBookId = 'book_' + Date.now(); 
 
   try {
+    // 1. Upload Cover Image
     const coverResult = await cloudinary.uploader.upload(coverLocalPath, {
       folder: 'uppcs_store_files',
       resource_type: 'image'
     });
 
-    const pdfResult = await cloudinary.uploader.upload_large(pdfLocalPath, {
-      folder: 'uppcs_store_files',
-      resource_type: 'auto',
-      chunk_size: 6000000 
+    // 2. Upload Large PDF (Wrapped in a Strict Promise)
+    const pdfResult = await new Promise((resolve, reject) => {
+      cloudinary.uploader.upload_large(pdfLocalPath, {
+        folder: 'uppcs_store_files',
+        resource_type: 'raw', // Safest format for storing large PDFs
+        chunk_size: 6000000 
+      }, (error, result) => {
+        if (error) return reject(error);
+        resolve(result);
+      });
     });
 
+    // 3. Save to Database
     const sql = `INSERT INTO books (id, title, description, category, pages, file_size_mb, price, physical_price, cover_image, file_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
     const values = [newBookId, title, "No description provided.", category || null, pages || null, fileSize || null, price, physicalPrice || null, coverResult.secure_url, pdfResult.secure_url];
 
     db.query(sql, values, (err) => {
       if (err) throw new Error('Database insertion failed'); 
       
+      // 4. Cleanup Temp Files ONLY after everything succeeds
       fs.unlinkSync(pdfLocalPath);
       fs.unlinkSync(coverLocalPath);
 
-      console.log(`✅ Chunked Upload & DB Save Success: ${title}`);
+      console.log(`✅ Bulletproof Upload & DB Save Success: ${title}`);
       res.status(200).json({ success: true, message: 'Upload successful!' });
     });
 
