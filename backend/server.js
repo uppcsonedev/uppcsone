@@ -246,17 +246,89 @@ app.get('/api/stream/:orderId', (req, res) => {
 });
 
 // ==========================================
-// Route F: Secure Admin Multi-File Upload (CLOUDINARY)
+// Route F: Secure Admin Multi-File Upload (CHUNKED / LARGE FILES)
 // ==========================================
-const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: {
-    folder: 'uppcs_store_files', 
-    resource_type: 'auto',       
-    public_id: (req, file) => {
-      const cleanName = file.originalname.replace(/\s+/g, '_').split('.')[0];
-      return Date.now() + '_' + cleanName;
-    }
+
+// 1. Temporarily save large files to the local Render disk
+const localDiskStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, 'temp_uploads');
+    // Create the temp folder if it doesn't exist
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const cleanName = file.originalname.replace(/\s+/g, '_').split('.')[0];
+    cb(null, Date.now() + '_' + cleanName + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ storage: localDiskStorage });
+
+const cpUpload = upload.fields([
+  { name: 'pdf', maxCount: 1 }, 
+  { name: 'coverImage', maxCount: 1 }
+]);
+
+app.post('/api/admin/upload', cpUpload, async (req, res) => {
+  if (!req.files || !req.files['pdf'] || !req.files['coverImage']) {
+    return res.status(400).json({ error: 'Both PDF and Cover Image are required.' });
+  }
+
+  const { title, category, pages, fileSize, price, physicalPrice } = req.body;
+  
+  // Grab the temporary local paths
+  const pdfLocalPath = req.files['pdf'][0].path; 
+  const coverLocalPath = req.files['coverImage'][0].path; 
+  const newBookId = 'book_' + Date.now(); 
+
+  try {
+    // 2. Upload Cover Image to Cloudinary (Standard Upload)
+    const coverResult = await cloudinary.uploader.upload(coverLocalPath, {
+      folder: 'uppcs_store_files',
+      resource_type: 'image'
+    });
+
+    // 3. Upload Large PDF to Cloudinary (CHUNKED UPLOAD - Bypasses 10MB limit)
+    const pdfResult = await cloudinary.uploader.upload_large(pdfLocalPath, {
+      folder: 'uppcs_store_files',
+      resource_type: 'auto',
+      chunk_size: 6000000 // Chops file into 6MB chunks to slip past the limit
+    });
+
+    // 4. Save the secure Cloudinary URLs to the Database
+    const sql = `
+      INSERT INTO books 
+      (id, title, description, category, pages, file_size_mb, price, physical_price, cover_image, file_url) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    const values = [
+      newBookId, title, "No description provided.", category || null, 
+      pages || null, fileSize || null, price, physicalPrice || null, 
+      coverResult.secure_url, pdfResult.secure_url
+    ];
+
+    db.query(sql, values, (err) => {
+      if (err) {
+        throw new Error('Database insertion failed'); // Throws to the catch block
+      }
+      
+      // 5. CLEANUP: Delete the temporary local files
+      fs.unlinkSync(pdfLocalPath);
+      fs.unlinkSync(coverLocalPath);
+
+      console.log(`✅ Chunked Upload & DB Save Success: ${title}`);
+      res.status(200).json({ success: true, message: 'Large upload successful!' });
+    });
+
+  } catch (error) {
+    console.error('🚨 Admin Large Upload Error:', error);
+
+    // EMERGENCY CLEANUP: If anything crashes, delete local files so the server doesn't get clogged
+    if (fs.existsSync(pdfLocalPath)) fs.unlinkSync(pdfLocalPath);
+    if (fs.existsSync(coverLocalPath)) fs.unlinkSync(coverLocalPath);
+
+    res.status(500).json({ error: 'Failed to upload large file or save to database.' });
   }
 });
 
