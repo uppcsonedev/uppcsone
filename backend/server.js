@@ -283,7 +283,7 @@ app.post('/api/admin/upload', cpUpload, async (req, res) => {
     const pdfResult = await new Promise((resolve, reject) => {
       cloudinary.uploader.upload_large(pdfLocalPath, {
         folder: 'uppcs_store_files',
-        resource_type: 'raw', // Safest format for storing large PDFs
+        resource_type: 'auto', // Changed back to 'auto' for PDF compatibility
         chunk_size: 6000000 
       }, (error, result) => {
         if (error) return reject(error);
@@ -295,8 +295,15 @@ app.post('/api/admin/upload', cpUpload, async (req, res) => {
     const sql = `INSERT INTO books (id, title, description, category, pages, file_size_mb, price, physical_price, cover_image, file_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
     const values = [newBookId, title, "No description provided.", category || null, pages || null, fileSize || null, price, physicalPrice || null, coverResult.secure_url, pdfResult.secure_url];
 
+    // 🚨 FIX: Handle DB errors properly without crashing Node
     db.query(sql, values, (err) => {
-      if (err) throw new Error('Database insertion failed'); 
+      if (err) {
+        console.error('🚨 Database Error:', err);
+        if (fs.existsSync(pdfLocalPath)) fs.unlinkSync(pdfLocalPath);
+        if (fs.existsSync(coverLocalPath)) fs.unlinkSync(coverLocalPath);
+        // Expose exact DB error to frontend
+        return res.status(500).json({ error: `Database Error: ${err.message}` });
+      } 
       
       // 4. Cleanup Temp Files ONLY after everything succeeds
       fs.unlinkSync(pdfLocalPath);
@@ -310,7 +317,10 @@ app.post('/api/admin/upload', cpUpload, async (req, res) => {
     console.error('🚨 Admin Upload Error:', error);
     if (fs.existsSync(pdfLocalPath)) fs.unlinkSync(pdfLocalPath);
     if (fs.existsSync(coverLocalPath)) fs.unlinkSync(coverLocalPath);
-    res.status(500).json({ error: 'Failed to upload file or save to database.' });
+    
+    // 🚨 FIX: Extract and send the EXACT Cloudinary error to the frontend
+    const errorMessage = error.message || (error.error && error.error.message) || JSON.stringify(error);
+    res.status(500).json({ error: `Cloud Error: ${errorMessage}` });
   }
 });
 
