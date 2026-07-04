@@ -8,15 +8,14 @@ const Razorpay = require('razorpay');
 const fs = require('fs'); 
 const multer = require('multer');
 
-// Cloudinary Imports
-const { v2: cloudinary } = require('cloudinary');
+// ==========================================
+// SUPABASE STORAGE INITIALIZATION
+// ==========================================
+const { createClient } = require('@supabase/supabase-js');
 
-// Configure Cloudinary
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
+const supabaseUrl = process.env.SUPABASE_URL; 
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY; 
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 const app = express();
 app.use(cors());
@@ -70,22 +69,22 @@ db.getConnection((err, connection) => {
 });
 
 // ==========================================
-// Helper Function: Secure Cloudinary Fetcher
+// Helper Function: Secure Cloud Fetcher
 // ==========================================
-const streamFromCloudinary = (url, res, orderId, isDownload) => {
+const streamFromCloud = (url, res, orderId, isDownload) => {
   const secureUrl = url.replace('http://', 'https://');
   const https = require('https');
 
   https.get(secureUrl, (cloudRes) => {
-      // 1. Follow Cloudinary Redirects
+      // 1. Follow Redirects
       if (cloudRes.statusCode >= 300 && cloudRes.statusCode < 400 && cloudRes.headers.location) {
-          return streamFromCloudinary(cloudRes.headers.location, res, orderId, isDownload);
+          return streamFromCloud(cloudRes.headers.location, res, orderId, isDownload);
       }
 
       // 2. Gatekeeper
       if (cloudRes.statusCode !== 200) {
-          console.error(`Cloudinary Error! Status: ${cloudRes.statusCode}`);
-          return res.status(500).send(`Error fetching file. Cloudinary Status: ${cloudRes.statusCode}`);
+          console.error(`Cloud Error! Status: ${cloudRes.statusCode}`);
+          return res.status(500).send(`Error fetching file. Cloud Status: ${cloudRes.statusCode}`);
       }
 
       // 3. Pipe to Browser
@@ -122,7 +121,7 @@ app.post('/api/orders', (req, res) => {
           amount: actualPrice * 100, 
           currency: "INR",
           receipt: `receipt_${internalOrderId}`,
-          notes: { internal_order_id: internalOrderId } // 👈 REQUIRED FOR WEBHOOK
+          notes: { internal_order_id: internalOrderId } 
         };
 
         const razorpayOrder = await razorpay.orders.create(options);
@@ -213,7 +212,7 @@ app.get('/api/download/:orderId', (req, res) => {
     const fileUrl = results[0].file_url;
 
     if (fileUrl.startsWith('http')) {
-        streamFromCloudinary(fileUrl, res, orderId, true); // true = force download
+        streamFromCloud(fileUrl, res, orderId, true); // true = force download
     } else {
         const filePath = path.join(__dirname, 'protected_files', fileUrl);
         res.download(filePath, `Ebook_${orderId}.pdf`);
@@ -236,7 +235,7 @@ app.get('/api/stream/:orderId', (req, res) => {
     const fileUrl = results[0].file_url;
 
     if (fileUrl.startsWith('http')) {
-        streamFromCloudinary(fileUrl, res, orderId, false); // false = inline stream
+        streamFromCloud(fileUrl, res, orderId, false); // false = inline stream
     } else {
         const filePath = path.join(__dirname, 'protected_files', fileUrl);
         res.sendFile(filePath);
@@ -245,7 +244,7 @@ app.get('/api/stream/:orderId', (req, res) => {
 });
 
 // ==========================================
-// Route F: Secure Admin Multi-File Upload (CHUNKED)
+// Route F: Secure Admin Multi-File Upload (SUPABASE)
 // ==========================================
 const localDiskStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -259,8 +258,16 @@ const localDiskStorage = multer.diskStorage({
   }
 });
 
-const upload = multer({ storage: localDiskStorage });
-const cpUpload = upload.fields([{ name: 'pdf', maxCount: 1 }, { name: 'coverImage', maxCount: 1 }]);
+// 100MB limit to handle massive PDFs smoothly
+const upload = multer({ 
+  storage: localDiskStorage,
+  limits: { fileSize: 100 * 1024 * 1024 } 
+});
+
+const cpUpload = upload.fields([
+  { name: 'pdf', maxCount: 1 }, 
+  { name: 'coverImage', maxCount: 1 }
+]);
 
 app.post('/api/admin/upload', cpUpload, async (req, res) => {
   if (!req.files || !req.files['pdf'] || !req.files['coverImage']) {
@@ -273,54 +280,65 @@ app.post('/api/admin/upload', cpUpload, async (req, res) => {
   const newBookId = 'book_' + Date.now(); 
 
   try {
-    // 1. Upload Cover Image
-    const coverResult = await cloudinary.uploader.upload(coverLocalPath, {
-      folder: 'uppcs_store_files',
-      resource_type: 'image'
-    });
+    // 1. Read files into memory from temporary Render disk
+    const coverBuffer = fs.readFileSync(coverLocalPath);
+    const pdfBuffer = fs.readFileSync(pdfLocalPath);
 
-    // 2. Upload Large PDF (Wrapped in a Strict Promise)
-    const pdfResult = await new Promise((resolve, reject) => {
-      cloudinary.uploader.upload_large(pdfLocalPath, {
-        folder: 'uppcs_store_files',
-        resource_type: 'auto', // Changed back to 'auto' for PDF compatibility
-        chunk_size: 6000000 
-      }, (error, result) => {
-        if (error) return reject(error);
-        resolve(result);
-      });
-    });
+    // 2. Upload Cover Image to Supabase
+    const coverFileName = `covers/${Date.now()}_${req.files['coverImage'][0].originalname.replace(/\s+/g, '_')}`;
+    const { error: coverError } = await supabase.storage
+      .from('uppcs_store_files')
+      .upload(coverFileName, coverBuffer, { contentType: req.files['coverImage'][0].mimetype });
+    
+    if (coverError) throw new Error(`Cover Upload Failed: ${coverError.message}`);
 
-    // 3. Save to Database
-    const sql = `INSERT INTO books (id, title, description, category, pages, file_size_mb, price, physical_price, cover_image, file_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-    const values = [newBookId, title, "No description provided.", category || null, pages || null, fileSize || null, price, physicalPrice || null, coverResult.secure_url, pdfResult.secure_url];
+    // 3. Upload Large PDF to Supabase
+    const pdfFileName = `pdfs/${Date.now()}_${req.files['pdf'][0].originalname.replace(/\s+/g, '_')}`;
+    const { error: pdfError } = await supabase.storage
+      .from('uppcs_store_files')
+      .upload(pdfFileName, pdfBuffer, { contentType: req.files['pdf'][0].mimetype });
 
-    // 🚨 FIX: Handle DB errors properly without crashing Node
+    if (pdfError) throw new Error(`PDF Upload Failed: ${pdfError.message}`);
+
+    // 4. Generate the Public URLs for the Database
+    const { data: coverUrlData } = supabase.storage.from('uppcs_store_files').getPublicUrl(coverFileName);
+    const { data: pdfUrlData } = supabase.storage.from('uppcs_store_files').getPublicUrl(pdfFileName);
+
+    // 5. Save to Aiven Database
+    const sql = `
+      INSERT INTO books 
+      (id, title, description, category, pages, file_size_mb, price, physical_price, cover_image, file_url) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    const values = [
+      newBookId, title, "No description provided.", category || null, 
+      pages || null, fileSize || null, price, physicalPrice || null, 
+      coverUrlData.publicUrl, pdfUrlData.publicUrl
+    ];
+
     db.query(sql, values, (err) => {
       if (err) {
         console.error('🚨 Database Error:', err);
         if (fs.existsSync(pdfLocalPath)) fs.unlinkSync(pdfLocalPath);
         if (fs.existsSync(coverLocalPath)) fs.unlinkSync(coverLocalPath);
-        // Expose exact DB error to frontend
         return res.status(500).json({ error: `Database Error: ${err.message}` });
       } 
       
-      // 4. Cleanup Temp Files ONLY after everything succeeds
+      // 6. Cleanup Temp Files from Render disk
       fs.unlinkSync(pdfLocalPath);
       fs.unlinkSync(coverLocalPath);
 
-      console.log(`✅ Bulletproof Upload & DB Save Success: ${title}`);
+      console.log(`✅ Supabase Upload & DB Save Success: ${title}`);
       res.status(200).json({ success: true, message: 'Upload successful!' });
     });
 
   } catch (error) {
     console.error('🚨 Admin Upload Error:', error);
+    
     if (fs.existsSync(pdfLocalPath)) fs.unlinkSync(pdfLocalPath);
     if (fs.existsSync(coverLocalPath)) fs.unlinkSync(coverLocalPath);
     
-    // 🚨 FIX: Extract and send the EXACT Cloudinary error to the frontend
-    const errorMessage = error.message || (error.error && error.error.message) || JSON.stringify(error);
-    res.status(500).json({ error: `Cloud Error: ${errorMessage}` });
+    res.status(500).json({ error: `Storage Error: ${error.message || error}` });
   }
 });
 
